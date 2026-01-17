@@ -1,0 +1,7 @@
+google-genai
+requests
+pandas
+ta
+streamlit
+python-dotenv
+yfinance
