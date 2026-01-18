@@ -7,6 +7,7 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TRADIER_ACCESS_TOKEN = os.getenv("TRADIER_SANDBOX_API_KEY")
+TRADIER_ACCOUNT_ID = os.getenv("TRADIER_SANDBOX_ACCOUNT_ID")
 
 # Tradier Environment
 # Sandbox: https://sandbox.tradier.com/v1

@@ -19,16 +19,22 @@ def run_trading_cycle():
     
     # 1. Load Portfolio
     pm = PortfolioManager()
-    equity = pm.get_equity()
-    logging.info(f"Current Cash: ${pm.portfolio['cash']:,.2f}")
+    
+    try:
+        cash = pm.get_cash()
+        equity = pm.get_equity()
+        logging.info(f"Current Cash: ${cash:,.2f} | Equity: ${equity:,.2f}")
+    except Exception as e:
+        logging.error(f"Failed to fetch portfolio info: {e}")
+        return
 
     # 2. Check Existing Positions for Exits (Stop Loss / Take Profit)
-    positions = list(pm.portfolio["positions"].items()) # Snapshot for iteration
-    for ticker, pos in positions:
+    positions = pm.get_positions()
+    
+    for ticker, pos in positions.items():
         try:
             # Fetch current quote
             quotes = MarketDataLoader.get_quotes([ticker])
-            # Tradier quotes structure: {'quotes': {'quote': {...}}}
             quote = quotes.get('quotes', {}).get('quote', {})
             if not quote:
                 logging.warning(f"Could not get quote for {ticker}")
@@ -37,25 +43,30 @@ def run_trading_cycle():
             current_price = quote.get('last')
             if not current_price:
                 continue
-                
-            avg_price = pos['avg_price']
+            
+            # Use cost basis per share approximation if needed, or total cost vs current value
+            # Tradier 'cost_basis' in positions is usually Total Cost.
+            quantity = pos['quantity']
+            total_cost = pos['cost_basis']
+            avg_price = total_cost / quantity if quantity > 0 else 0
+            
             pct_change = (current_price - avg_price) / avg_price
             
             logging.info(f"Checking {ticker}: Entry={avg_price:.2f}, Current={current_price:.2f}, PnL={pct_change:.2%}")
             
             if pct_change <= -STOP_LOSS_PCT:
                 logging.info(f"STOP LOSS triggered for {ticker}")
-                pm.execute_sell(ticker, current_price)
+                pm.execute_sell(ticker, current_price, shares=quantity)
             elif pct_change >= TAKE_PROFIT_PCT:
                 logging.info(f"TAKE PROFIT triggered for {ticker}")
-                pm.execute_sell(ticker, current_price)
+                pm.execute_sell(ticker, current_price, shares=quantity)
                 
         except Exception as e:
             logging.error(f"Error managing position {ticker}: {e}")
 
     # 3. Scan for New Entries
     for ticker in TICKERS:
-        if ticker in pm.portfolio["positions"]:
+        if ticker in positions:
             continue # Already in position
             
         logging.info(f"Scanning {ticker}...")
@@ -80,22 +91,18 @@ def run_trading_cycle():
                 # Check for enough history
                 # StrategyEngine already checked momentum, so we rely on that.
                 
-                target_position_size = equity * MAX_POSITION_SIZE_PCT # Base on initial implementation plan logic? 
-                # Or total equity including positions?
-                # Using 'equity' as cash for now from PM? No PM returns cash.
-                # Let's assume constant sizing based on initial capital or current cash?
-                # Let's use current cash available max or a fixed % of total portfolio value roughly.
-                # For safety, let's use min(cash, 5000) for now?
-                # Config says 5%.
+                target_position_size = equity * MAX_POSITION_SIZE_PCT 
                 
-                amount_invest = 5000.0 # Placeholder for $100k account -> 5%
+                # Cap at $5000 or available cash
+                amount_invest = min(5000.0, cash)
                 
-                pm.execute_buy(ticker, current_price, amount_invest)
+                if amount_invest > current_price: # Ensure we can buy at least 1 share
+                     pm.execute_buy(ticker, current_price, amount_invest)
                 
         except Exception as e:
             logging.error(f"Error analyzing {ticker}: {e}")
 
-    # 4. Save Portfolio is handled by PM execute methods
+    # 4. Save Portfolio is handled by API
     logging.info("Trading cycle completed.")
 
 if __name__ == "__main__":

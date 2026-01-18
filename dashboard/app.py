@@ -12,33 +12,31 @@ st.set_page_config(page_title="Trading Agent Dashboard", layout="wide")
 
 st.title("🤖 Sentiment-Augmented Momentum Trader")
 
-PORTFOLIO_FILE = "../portfolio.json"
+import streamlit as st
+import pandas as pd
+import os
+import sys
 
-def load_portfolio():
-    if os.path.exists(PORTFOLIO_FILE):
-        with open(PORTFOLIO_FILE, "r") as f:
-            return json.load(f)
-    return None
+# Add parent dir to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-data = load_portfolio()
+from portfolio_manager import PortfolioManager
 
-if not data:
-    st.error("Portfolio file not found. Run the agent first!")
-else:
+st.set_page_config(page_title="Trading Agent Dashboard", layout="wide")
+
+st.title("🤖 Sentiment-Augmented Momentum Trader (Tradier Sandbox)")
+
+try:
+    pm = PortfolioManager()
+    
     # Key Metrics
-    cash = data.get("cash", 0)
-    positions = data.get("positions", {})
-    history = data.get("history", [])
-    
-    # Calculate approximate equity (using last known price from trades isn't accurate, 
-    # ideally we fetch live prices calculation here or store 'last_equity' in json)
-    # For now, show Cash + Cost Basis of Positions
-    
-    positions_value = sum([p["shares"] * p["avg_price"] for p in positions.values()])
-    total_equity = cash + positions_value
-    
+    with st.spinner('Fetching Data from Tradier...'):
+        cash = pm.get_cash()
+        equity = pm.get_equity()
+        positions = pm.get_positions()
+        
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total Equity (Est)", f"${total_equity:,.2f}")
+    col1.metric("Total Equity", f"${equity:,.2f}")
     col2.metric("Cash Available", f"${cash:,.2f}")
     col3.metric("Active Positions", len(positions))
     
@@ -47,21 +45,23 @@ else:
     # Active Positions
     st.subheader("Active Positions")
     if positions:
-        df_pos = pd.DataFrame.from_dict(positions, orient='index')
-        df_pos = df_pos.reset_index().rename(columns={'index': 'Ticker'})
-        # Add current value approximate column?
+        # Convert dict to list for dataframe
+        pos_list = []
+        for ticker, data in positions.items():
+            data['ticker'] = ticker
+            pos_list.append(data)
+            
+        df_pos = pd.DataFrame(pos_list)
+        # Reorder columns
+        cols = ['ticker', 'quantity', 'cost_basis']
+        df_pos = df_pos[cols]
         st.dataframe(df_pos, use_container_width=True)
     else:
         st.info("No active positions.")
         
-    st.divider()
+    # Note: Trade History is harder to get via simple endpoint efficiently without paginating events.
+    # For now, we omit history or we could fetch orders endpoint.
     
-    # Trade History
-    st.subheader("Trade History")
-    if history:
-        df_hist = pd.DataFrame(history)
-        df_hist['date'] = pd.to_datetime(df_hist['date'])
-        df_hist = df_hist.sort_values(by='date', ascending=False)
-        st.dataframe(df_hist, use_container_width=True)
-    else:
-        st.info("No trades executed yet.")
+except Exception as e:
+    st.error(f"Error connecting to Tradier: {e}")
+

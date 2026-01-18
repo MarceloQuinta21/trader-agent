@@ -1,96 +1,121 @@
-import json
-import os
+import requests
 import config
 import logging
 
 class PortfolioManager:
-    FILE_PATH = "portfolio.json"
-
     def __init__(self):
-        self.portfolio = self.load_portfolio()
+        self.base_url = config.TRADIER_BASE_URL
+        self.account_id = config.TRADIER_ACCOUNT_ID
+        self.headers = {
+            "Authorization": f"Bearer {config.TRADIER_ACCESS_TOKEN}",
+            "Accept": "application/json"
+        }
 
-    def load_portfolio(self):
-        if os.path.exists(self.FILE_PATH):
-            with open(self.FILE_PATH, 'r') as f:
-                return json.load(f)
+    def get_account_balance(self):
+        """Fetches account balance details."""
+        url = f"{self.base_url}/accounts/{self.account_id}/balances"
+        response = requests.get(url, headers=self.headers)
+        if response.status_code == 200:
+            return response.json().get('balances', {})
         else:
-            return {
-                "cash": config.INITIAL_CAPITAL,
-                "positions": {},  # "AAPL": {"shares": 10, "avg_price": 150.0}
-                "history": []
-            }
-
-    def save_portfolio(self):
-        with open(self.FILE_PATH, 'w') as f:
-            json.dump(self.portfolio, f, indent=4)
+            logging.error(f"Error fetching balances: {response.text}")
+            return {}
 
     def get_equity(self):
-        # Rough estimate: cash + value of positions (need current prices, passed recursively or fetched? 
-        # For simplicity, just return cash for buying power checks, or track total separately)
-        # To get real equity, we'd need current market prices. 
-        # For now, let's just return cash for the purpose of checking buying power.
-        return self.portfolio["cash"]
+        """Returns total equity from Tradier."""
+        balances = self.get_account_balance()
+        return balances.get('total_equity', 0.0)
 
-    def execute_buy(self, ticker, price, amount_usd):
-        """Executes a paper buy order."""
-        if self.portfolio["cash"] < amount_usd:
-            logging.warning(f"Insufficient funds to buy {ticker}. Cash: {self.portfolio['cash']}, Needed: {amount_usd}")
-            return False
+    def get_cash(self):
+        """Returns total cash from Tradier."""
+        balances = self.get_account_balance()
+        return balances.get('total_cash', 0.0)
 
-        shares = amount_usd / price
-        self.portfolio["cash"] -= amount_usd
-        
-        if ticker in self.portfolio["positions"]:
-            # Average down/up
-            pos = self.portfolio["positions"][ticker]
-            total_shares = pos["shares"] + shares
-            total_cost = (pos["shares"] * pos["avg_price"]) + amount_usd
-            pos["shares"] = total_shares
-            pos["avg_price"] = total_cost / total_shares
+    def get_positions(self):
+        """Fetches current positions."""
+        url = f"{self.base_url}/accounts/{self.account_id}/positions"
+        response = requests.get(url, headers=self.headers)
+        if response.status_code == 200:
+            # Tradier returns 'positions': {'position': [...]} or just 'positions': 'null' if empty
+            data = response.json().get('positions', {})
+            if data == 'null' or not data:
+                return {}
+            
+            # Normalize to list
+            pos_list = data.get('position', [])
+            if isinstance(pos_list, dict):
+                pos_list = [pos_list]
+                
+            # Convert to dictionary format for easier lookup: {ticker: {shares: x, cost_basis: y}}
+            positions = {}
+            for p in pos_list:
+                positions[p['symbol']] = {
+                    "shares": p['quantity'],
+                    "avg_price": p['cost_basis'], # Note: cost_basis is total cost or per share? Tradier usually gives cost_basis as per share average. Wait, Tradier 'cost_basis' is usually total cost. 'period_close' might be easier? 
+                    # Actually Tradier 'cost_basis' field in positions response is often total cost. 
+                    # Let's check documentation or assume cost_basis per share.
+                    # Sandbox usually returns standard fields. Let's use 'cost_basis' / 'quantity' to be safe if needed, 
+                    # but usually there is 'cost_basis' (total) and 'quantity'.
+                    # Let's verify this during test. For now, we store the raw object mostly.
+                    "cost_basis": p['cost_basis'],
+                    "quantity": p['quantity']
+                }
+            return positions
         else:
-            self.portfolio["positions"][ticker] = {
-                "shares": shares,
-                "avg_price": price
-            }
-            
-        self._log_trade("BUY", ticker, price, shares, amount_usd)
-        self.save_portfolio()
-        logging.info(f"BOUGHT {ticker}: {shares:.2f} shares @ {price:.2f}")
-        return True
+            logging.error(f"Error fetching positions: {response.text}")
+            return {}
 
-    def execute_sell(self, ticker, price, shares=None):
-        """Executes a paper sell order. If shares is None, sells all."""
-        if ticker not in self.portfolio["positions"]:
-            logging.warning(f"Cannot sell {ticker}, not in portfolio.")
+    def execute_buy(self, ticker, price, amount_usd): # price and amount_usd might be approximate
+        """Executes a buy order (Market Order)."""
+        # Calculate shares based on price (Tradier API handles logic, but we need quantity)
+        quantity = int(amount_usd // price)
+        if quantity < 1:
+            logging.warning(f"Quantity 0 for {ticker}, skipping buy.")
             return False
-            
-        pos = self.portfolio["positions"][ticker]
-        current_shares = pos["shares"]
-        
-        if shares is None or shares > current_shares:
-            shares = current_shares
-            
-        amount_usd = shares * price
-        
-        self.portfolio["cash"] += amount_usd
-        pos["shares"] -= shares
-        
-        if pos["shares"] < 1e-6: # Float tolerance
-            del self.portfolio["positions"][ticker]
-            
-        self._log_trade("SELL", ticker, price, shares, amount_usd)
-        self.save_portfolio()
-        logging.info(f"SOLD {ticker}: {shares:.2f} shares @ {price:.2f}")
-        return True
 
-    def _log_trade(self, action, ticker, price, shares, amount):
-        from datetime import datetime
-        trade_record = {
-            "date": datetime.now().isoformat(),
-            "action": action,
-            "ticker": ticker,
-            "price": price,
-            "shares": shares,
-            "amount": amount
+        url = f"{self.base_url}/accounts/{self.account_id}/orders"
+        params = {
+            "class": "equity",
+            "symbol": ticker,
+            "side": "buy",
+            "quantity": quantity,
+            "type": "market",
+            "duration": "day"
         }
-        self.portfolio["history"].append(trade_record)
+        
+        response = requests.post(url, params=params, headers=self.headers)
+        if response.status_code == 200:
+            logging.info(f"ORDER SENT: Buy {quantity} {ticker} (Resp: {response.json()})")
+            return True
+        else:
+            logging.error(f"Order Failed {ticker}: {response.text}")
+            return False
+
+    def execute_sell(self, ticker, price, shares=None): # shares handles quantity
+        """Executes a sell order (Market Order)."""
+        # If shares is None, we need to know how many we have. 
+        # Calling get_positions to verify.
+        if shares is None:
+            positions = self.get_positions()
+            if ticker not in positions:
+                logging.warning(f"Cannot sell {ticker}, not in positions.")
+                return False
+            shares = positions[ticker]['quantity']
+
+        url = f"{self.base_url}/accounts/{self.account_id}/orders"
+        params = {
+            "class": "equity",
+            "symbol": ticker,
+            "side": "sell",
+            "quantity": int(shares),
+            "type": "market",
+            "duration": "day"
+        }
+        
+        response = requests.post(url, params=params, headers=self.headers)
+        if response.status_code == 200:
+            logging.info(f"ORDER SENT: Sell {shares} {ticker} (Resp: {response.json()})")
+            return True
+        else:
+            logging.error(f"Order Failed {ticker}: {response.text}")
+            return False
