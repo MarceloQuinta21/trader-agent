@@ -1,16 +1,4 @@
-import streamlit as st
-import pandas as pd
-import json
-import os
-import sys
 
-# Add parent dir to path to import config/manager if needed, 
-# but we mainly rely on portfolio.json
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-st.set_page_config(page_title="Trading Agent Dashboard", layout="wide")
-
-st.title("🤖 Sentiment-Augmented Momentum Trader")
 
 import streamlit as st
 import pandas as pd
