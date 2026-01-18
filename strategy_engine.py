@@ -36,14 +36,14 @@ class SentimentAnalyzer:
             return {"sentiment": "NEUTRAL", "reasoning": "No news found."}
 
         # Prepare context from news items (title + summary/link)
-        news_text = "\n".join([f"- {item.get('title', 'No Title')} ({item.get('summary', 'No Summary')})" for item in news_items[:5]])
+        # news_text = "\n".join([f"- {item.get('title', 'No Title')} ({item.get('summary', 'No Summary')})" for item in news_items[:5]])
         
         prompt = f"""
         Analyze the sentiment of the following recent news headlines for the stock '{ticker}'.
         Determine if the sentiment is BULLISH, BEARISH, or NEUTRAL for the short-term price action (next 24 hours).
         
         News:
-        {news_text}
+        {news_items}
         
         Return a JSON object with the following keys:
         - "sentiment": "BULLISH", "BEARISH", or "NEUTRAL"
